@@ -3,7 +3,7 @@
 import json
 import os
 import pathlib
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from google import genai
@@ -93,7 +93,8 @@ async def generate_text(
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
     model: Optional[str] = None,
-) -> str | None:
+    custom_message: Optional[str] = None,
+) -> str:
     """Generate text using Gemini model.
 
     Args:
@@ -102,6 +103,7 @@ async def generate_text(
         temperature: Optional temperature override (0.0-1.0).
         max_tokens: Optional maximum tokens to generate.
         model: Optional model name override.
+        custom_message: Optional custom message providing additional context or instructions.
 
     Returns:
         Generated text response.
@@ -119,8 +121,14 @@ async def generate_text(
             "top_p": DEFAULT_TOP_P,
             "top_k": DEFAULT_TOP_K,
         }
-        if system_instruction:
+
+        # Handle system instruction and custom message
+        if system_instruction and custom_message:
+            params["system_instruction"] = f"{system_instruction}\n\n{custom_message}"
+        elif system_instruction:
             params["system_instruction"] = system_instruction
+        elif custom_message:
+            params["system_instruction"] = custom_message
 
         # Create content
         response = await client.aio.models.generate_content(
@@ -129,7 +137,7 @@ async def generate_text(
             config=params,
         )
 
-        return response.text
+        return response.text if response.text is not None else "No text generated"
     except Exception as e:
         return f"Error generating content: {str(e)}"
 
@@ -296,7 +304,7 @@ def read_file_content(file_path: str) -> str:
         return f"Error reading file {file_path}: {str(e)}"
 
 
-def get_file_info(file_path: str) -> Dict[str, str]:
+def get_file_info(file_path: str) -> Dict[str, object]:
     """Get file metadata and content.
 
     Args:
@@ -345,7 +353,7 @@ def write_to_file(file_path: str, content: str) -> str:
 
 def scan_directory(
     dir_path: str, pattern: str = "*", max_depth: int = 3
-) -> List[Dict[str, str]]:
+) -> List[Dict[str, object]]:
     """Scan a directory for files matching a pattern.
 
     Args:
@@ -361,7 +369,7 @@ def scan_directory(
         if not path.exists() or not path.is_dir():
             return [{"error": f"Not a valid directory: {dir_path}"}]
 
-        files = []
+        files: List[Dict[str, object]] = []
         for i, file_path in enumerate(path.glob(pattern)):
             if i > 100:  # Safety limit
                 files.append({"note": "Directory scan limited to 100 files"})
@@ -396,6 +404,7 @@ async def analyze_repo_structure(
     repo_path: str,
     output_file: Optional[str] = None,
     temperature: Optional[float] = 0.2,
+    custom_message: Optional[str] = None,
 ) -> str:
     """Analyze repository structure and organization.
 
@@ -403,6 +412,7 @@ async def analyze_repo_structure(
         repo_path: Path to the repository root directory.
         output_file: Optional file path to write the analysis to.
         temperature: Optional temperature override (0.0-1.0).
+        custom_message: Optional custom message providing additional context or instructions.
 
     Returns:
         Repository structure analysis.
@@ -434,7 +444,7 @@ async def analyze_repo_structure(
             "Dockerfile*",
         ]
 
-        important_files = []
+        important_files: List[Dict[str, object]] = []
         for pattern in patterns:
             files = scan_directory(repo_path, f"**/{pattern}", max_depth=5)
             important_files.extend(files[:10])  # Limit results per pattern
@@ -448,7 +458,9 @@ async def analyze_repo_structure(
 
         # Create prompt
         prompt = f"""Analyze this repository structure and provide insights about its organization, 
-architecture, and code patterns. 
+architecture, and code patterns.
+
+{custom_message if custom_message else ""}
 
 Repository information:
 {json.dumps(repo_context, indent=2)}
@@ -481,13 +493,13 @@ Provide your analysis in a clear, structured format with headings and bullet poi
         analysis = response.text
 
         # Write to file if specified
-        if output_file:
+        if output_file and analysis is not None:
             result = write_to_file(output_file, analysis)
             if result.startswith("Error"):
                 return f"{result}\n\nAnalysis:\n{analysis}"
             return f"Repository structure analysis written to {output_file}"
 
-        return analysis
+        return analysis if analysis is not None else "No analysis generated"
 
     except Exception as e:
         return f"Error analyzing repository structure: {str(e)}"
@@ -499,6 +511,7 @@ async def identify_patterns(
     pattern_type: str = "coding",  # Options: coding, architecture, testing, error-handling
     output_file: Optional[str] = None,
     temperature: Optional[float] = 0.2,
+    custom_message: Optional[str] = None,
 ) -> str:
     """Identify patterns in code files.
 
@@ -507,19 +520,20 @@ async def identify_patterns(
         pattern_type: Type of patterns to identify (coding, architecture, testing, error-handling).
         output_file: Optional file path to write the analysis to.
         temperature: Optional temperature override (0.0-1.0).
+        custom_message: Optional custom message providing additional context or instructions.
 
     Returns:
         Identified patterns in the provided code files.
     """
     try:
         # Read content of all files
-        file_contents = []
+        file_contents: List[Dict[str, Any]] = []
         for file_path in code_files:
             content = read_file_content(file_path)
             if content.startswith("Error"):
                 return content
 
-            file_info = {
+            file_info: Dict[str, Any] = {
                 "path": file_path,
                 "name": pathlib.Path(file_path).name,
                 "content": content,
@@ -536,6 +550,8 @@ async def identify_patterns(
 
         # Create prompt
         prompt = f"""Analyze these code files and identify {pattern_focus}.
+
+{custom_message if custom_message else ""}
 
 Provided files:
 {json.dumps([{"path": f["path"], "name": f["name"]} for f in file_contents], indent=2)}
@@ -570,13 +586,13 @@ Format your response with clear headings and examples from the code.
         analysis = response.text
 
         # Write to file if specified
-        if output_file:
+        if output_file and analysis is not None:
             result = write_to_file(output_file, analysis)
             if result.startswith("Error"):
                 return f"{result}\n\nAnalysis:\n{analysis}"
             return f"Pattern analysis written to {output_file}"
 
-        return analysis
+        return analysis if analysis is not None else "No pattern analysis generated"
 
     except Exception as e:
         return f"Error identifying patterns: {str(e)}"
@@ -588,6 +604,7 @@ async def plan_implementation(
     context_files: List[str] = [],
     output_file: Optional[str] = None,
     temperature: Optional[float] = 0.3,
+    custom_message: Optional[str] = None,
 ) -> str:
     """Generate implementation plan based on requirements and code context.
 
@@ -596,19 +613,20 @@ async def plan_implementation(
         context_files: List of file paths to provide context.
         output_file: Optional file path to write the plan to.
         temperature: Optional temperature override (0.0-1.0).
+        custom_message: Optional custom message providing additional context or instructions.
 
     Returns:
         Implementation plan with task breakdown.
     """
     try:
         # Read content of context files
-        file_contexts = []
+        file_contexts: List[Dict[str, Any]] = []
         for file_path in context_files:
             content = read_file_content(file_path)
             if content.startswith("Error"):
                 continue  # Skip files with errors but proceed with plan
 
-            file_info = {
+            file_info: Dict[str, Any] = {
                 "path": file_path,
                 "name": pathlib.Path(file_path).name,
                 "content": content,
@@ -621,12 +639,14 @@ async def plan_implementation(
             context_section = "Reference code from existing files:\n\n"
             context_section += "\n\n".join(
                 [
-                    f"--- {f['path']} ---\n```\n{f['content']}\n```"
+                    f"--- {f.get('path', '')} ---\n```\n{f.get('content', '')}\n```"
                     for f in file_contexts
                 ]
             )
 
         prompt = f"""Create a detailed implementation plan for the following requirements:
+
+{custom_message if custom_message else ""}
 
 REQUIREMENTS:
 {requirements}
@@ -675,13 +695,13 @@ Format your response as a structured implementation plan document.
         plan = response.text
 
         # Write to file if specified
-        if output_file:
+        if output_file and plan is not None:
             result = write_to_file(output_file, plan)
             if result.startswith("Error"):
                 return f"{result}\n\nPlan:\n{plan}"
             return f"Implementation plan written to {output_file}"
 
-        return plan
+        return plan if plan is not None else "No implementation plan generated"
 
     except Exception as e:
         return f"Error creating implementation plan: {str(e)}"
@@ -693,6 +713,7 @@ async def review_code(
     review_focus: str = "all",  # Options: all, quality, security, performance, style
     output_file: Optional[str] = None,
     temperature: Optional[float] = 0.2,
+    custom_message: Optional[str] = None,
 ) -> str:
     """Review code for quality, security, performance, or style issues.
 
@@ -701,19 +722,20 @@ async def review_code(
         review_focus: Focus area for the review (all, quality, security, performance, style).
         output_file: Optional file path to write the review to.
         temperature: Optional temperature override (0.0-1.0).
+        custom_message: Optional custom message providing additional context or instructions.
 
     Returns:
         Code review with identified issues and recommendations.
     """
     try:
         # Read content of all files
-        file_contents = []
+        file_contents: List[Dict[str, Any]] = []
         for file_path in code_files:
             content = read_file_content(file_path)
             if content.startswith("Error"):
                 return content
 
-            file_info = {
+            file_info: Dict[str, Any] = {
                 "path": file_path,
                 "name": pathlib.Path(file_path).name,
                 "content": content,
@@ -731,6 +753,8 @@ async def review_code(
 
         # Create prompt
         prompt = f"""Perform a detailed code review focusing on {focus_instructions}.
+
+{custom_message if custom_message else ""}
 
 Provided files for review:
 {json.dumps([{"path": f["path"], "name": f["name"]} for f in file_contents], indent=2)}
@@ -769,13 +793,13 @@ Focus your review on {focus_instructions}. Provide concrete, actionable feedback
         review = response.text
 
         # Write to file if specified
-        if output_file:
+        if output_file and review is not None:
             result = write_to_file(output_file, review)
             if result.startswith("Error"):
                 return f"{result}\n\nReview:\n{review}"
             return f"Code review written to {output_file}"
 
-        return review
+        return review if review is not None else "No code review generated"
 
     except Exception as e:
         return f"Error performing code review: {str(e)}"
@@ -788,6 +812,7 @@ async def design_architecture(
     tech_stack: Optional[str] = None,
     output_file: Optional[str] = None,
     temperature: Optional[float] = 0.3,
+    custom_message: Optional[str] = None,
 ) -> str:
     """Design software architecture based on requirements.
 
@@ -797,19 +822,20 @@ async def design_architecture(
         tech_stack: Optional technology stack constraints or preferences.
         output_file: Optional file path to write the architecture design to.
         temperature: Optional temperature override (0.0-1.0).
+        custom_message: Optional custom message providing additional context or instructions.
 
     Returns:
         Architecture design document.
     """
     try:
         # Read content of context files
-        file_contexts = []
+        file_contexts: List[Dict[str, Any]] = []
         for file_path in context_files:
             content = read_file_content(file_path)
             if content.startswith("Error"):
                 continue  # Skip files with errors but proceed with design
 
-            file_info = {
+            file_info: Dict[str, Any] = {
                 "path": file_path,
                 "name": pathlib.Path(file_path).name,
                 "content": content,
@@ -822,7 +848,7 @@ async def design_architecture(
             context_section = "Reference code from existing files:\n\n"
             context_section += "\n\n".join(
                 [
-                    f"--- {f['path']} ---\n```\n{f['content']}\n```"
+                    f"--- {f.get('path', '')} ---\n```\n{f.get('content', '')}\n```"
                     for f in file_contexts
                 ]
             )
@@ -832,6 +858,8 @@ async def design_architecture(
             tech_stack_section = f"TECHNOLOGY STACK CONSTRAINTS:\n{tech_stack}\n\n"
 
         prompt = f"""Design a software architecture for the following requirements:
+
+{custom_message if custom_message else ""}
 
 REQUIREMENTS:
 {requirements}
@@ -887,13 +915,13 @@ Format your response as a structured architecture design document with clear sec
         design = response.text
 
         # Write to file if specified
-        if output_file:
+        if output_file and design is not None:
             result = write_to_file(output_file, design)
             if result.startswith("Error"):
                 return f"{result}\n\nArchitecture Design:\n{design}"
             return f"Architecture design written to {output_file}"
 
-        return design
+        return design if design is not None else "No architecture design generated"
 
     except Exception as e:
         return f"Error creating architecture design: {str(e)}"
