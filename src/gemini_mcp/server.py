@@ -94,6 +94,7 @@ async def generate_text(
     max_tokens: Optional[int] = None,
     model: Optional[str] = None,
     custom_message: Optional[str] = None,
+    context_files: List[str] = [],
 ) -> str:
     """Generate text using Gemini model.
 
@@ -104,6 +105,7 @@ async def generate_text(
         max_tokens: Optional maximum tokens to generate.
         model: Optional model name override.
         custom_message: Optional custom message providing additional context or instructions.
+        context_files: List of file paths to provide additional context.
 
     Returns:
         Generated text response.
@@ -122,6 +124,36 @@ async def generate_text(
             "top_k": DEFAULT_TOP_K,
         }
 
+        # Read content of context files
+        file_contexts: List[Dict[str, Any]] = []
+        for file_path in context_files:
+            content = read_file_content(file_path)
+            if content.startswith("Error"):
+                return content
+
+            file_info: Dict[str, Any] = {
+                "path": file_path,
+                "name": pathlib.Path(file_path).name,
+                "content": content,
+            }
+            file_contexts.append(file_info)
+
+        # Create file context section
+        file_context_section = ""
+        if file_contexts:
+            file_context_section = "\n\nFile context for reference:\n\n"
+            file_context_section += "\n\n".join(
+                [
+                    f"--- {f.get('path', '')} ---\n```\n{f.get('content', '')}\n```"
+                    for f in file_contexts
+                ]
+            )
+
+        # Prepare the prompt with file context
+        complete_prompt = prompt
+        if file_contexts:
+            complete_prompt = f"{prompt}\n{file_context_section}"
+
         # Handle system instruction and custom message
         if system_instruction and custom_message:
             params["system_instruction"] = f"{system_instruction}\n\n{custom_message}"
@@ -133,7 +165,7 @@ async def generate_text(
         # Create content
         response = await client.aio.models.generate_content(
             model=model_name,
-            contents=prompt,
+            contents=complete_prompt,
             config=params,
         )
 
