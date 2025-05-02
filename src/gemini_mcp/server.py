@@ -703,10 +703,6 @@ Your implementation plan should include:
    - Security considerations (if applicable)
    - Testing approach
 
-4. Timeline Estimate:
-   - Rough estimate of implementation effort
-   - Any dependencies between tasks
-
 Format your response as a structured implementation plan document.
 """
 
