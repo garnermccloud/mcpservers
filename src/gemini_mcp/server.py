@@ -33,7 +33,7 @@ if not api_key:
 client = genai.Client(api_key=api_key)
 
 # Get default configuration from environment
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro-exp-03-25")
+DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro-preview-05-06")
 DEFAULT_TEMPERATURE = float(os.environ.get("GEMINI_TEMPERATURE", "0.7"))
 DEFAULT_MAX_TOKENS = (
     int(os.environ.get("GEMINI_MAX_TOKENS", "66535"))
