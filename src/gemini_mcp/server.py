@@ -7,7 +7,12 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from google import genai
-from google.genai.types import GenerateContentConfigDict
+from google.genai.types import (
+    GenerateContentConfig,
+    GenerateContentConfigDict,
+    GoogleSearch,
+    Tool,
+)
 from mcp.server.fastmcp import FastMCP
 
 # Load environment variables
@@ -23,14 +28,18 @@ mcp_server = FastMCP(
 
 # Get API key from environment
 api_key = os.environ.get("GOOGLE_API_KEY")
-if not api_key:
+use_vertex_ai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true"
+
+if not api_key and not use_vertex_ai:
     raise ValueError(
         "GOOGLE_API_KEY environment variable not set. "
         "Please set it or create a .env file."
     )
-
-# Initialize Gemini client
-client = genai.Client(api_key=api_key)
+if use_vertex_ai:
+    client = genai.Client()
+else:
+    # Initialize Gemini client
+    client = genai.Client(api_key=api_key)
 
 # Get default configuration from environment
 DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro-preview-05-06")
@@ -172,6 +181,56 @@ async def generate_text(
         return response.text if response.text is not None else "No text generated"
     except Exception as e:
         return f"Error generating content: {str(e)}"
+
+
+@mcp_server.tool()
+async def search_and_analyze_current_info(
+    question: str,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    model: Optional[str] = None,
+    custom_message: Optional[str] = None,
+) -> str:
+    """Search for current information and provide an AI-analyzed response.
+
+    This tool gives Gemini the ability to search the web for real-time information
+    and provide a comprehensive, fact-based response. The AI will automatically
+    search for relevant information and synthesize it into a well-sourced answer.
+
+
+    Args:
+        question: The question or request you want Gemini to answer using current web data.
+
+    Returns:
+        AI-generated response based on current web search results.
+    """
+    try:
+        # Configure generation parameters
+        model_name = model if model else "gemini-2.5-flash-preview-05-20"
+
+        # Create content with custom message if provided
+        prompt = question
+        if custom_message:
+            prompt = f"{question}\n\nAdditional context: {custom_message}"
+
+        # Generate content with Google Search tool
+        response = await client.aio.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=GenerateContentConfig(
+                tools=[Tool(google_search=GoogleSearch())],
+                temperature=temperature if temperature is not None else 0.0,
+                max_output_tokens=max_tokens
+                if max_tokens is not None
+                else DEFAULT_MAX_TOKENS,
+                top_p=DEFAULT_TOP_P,
+                top_k=DEFAULT_TOP_K,
+            ),
+        )
+
+        return response.text if response.text is not None else "No results generated"
+    except Exception as e:
+        return f"Error performing web search: {str(e)}"
 
 
 # @mcp_server.tool()
