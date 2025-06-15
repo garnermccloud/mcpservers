@@ -42,7 +42,7 @@ else:
     client = genai.Client(api_key=api_key)
 
 # Get default configuration from environment
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro-preview-05-06")
+DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-pro-preview-06-05")
 DEFAULT_TEMPERATURE = float(os.environ.get("GEMINI_TEMPERATURE", "0.7"))
 DEFAULT_MAX_TOKENS = (
     int(os.environ.get("GEMINI_MAX_TOKENS", "66535"))
@@ -99,36 +99,27 @@ async def list_models() -> str:
 async def generate_text(
     prompt: str,
     system_instruction: Optional[str] = None,
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-    model: Optional[str] = None,
     custom_message: Optional[str] = None,
     context_files: List[str] = [],
+    output_file: Optional[str] = None,
 ) -> str:
     """Generate text using Gemini model.
 
     Args:
         prompt: The user prompt to send to Gemini.
         system_instruction: Optional system instructions to guide the model.
-        temperature: Optional temperature override (0.0-1.0).
-        max_tokens: Optional maximum tokens to generate.
-        model: Optional model name override.
         custom_message: Optional custom message providing additional context or instructions.
         context_files: List of file paths to provide additional context.
-
+        output_file: Optional file path to write the response to.
     Returns:
         Generated text response.
     """
     try:
         # Configure generation parameters
-        model_name = model if model else DEFAULT_MODEL
+        model_name = DEFAULT_MODEL
         params: GenerateContentConfigDict = {
-            "temperature": temperature
-            if temperature is not None
-            else DEFAULT_TEMPERATURE,
-            "max_output_tokens": max_tokens
-            if max_tokens is not None
-            else DEFAULT_MAX_TOKENS,
+            "temperature": DEFAULT_TEMPERATURE,
+            "max_output_tokens": DEFAULT_MAX_TOKENS,
             "top_p": DEFAULT_TOP_P,
             "top_k": DEFAULT_TOP_K,
         }
@@ -177,6 +168,11 @@ async def generate_text(
             contents=complete_prompt,
             config=params,
         )
+        if output_file and response.text is not None:
+            result = write_to_file(output_file, response.text)
+            if result.startswith("Error"):
+                return f"{result}\n\nResponse:\n{response.text}"
+            return f"Repository structure analysis written to {output_file}"
 
         return response.text if response.text is not None else "No text generated"
     except Exception as e:
@@ -186,9 +182,6 @@ async def generate_text(
 @mcp_server.tool()
 async def search_and_analyze_current_info(
     question: str,
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-    model: Optional[str] = None,
     custom_message: Optional[str] = None,
 ) -> str:
     """Search for current information and provide an AI-analyzed response.
@@ -206,7 +199,7 @@ async def search_and_analyze_current_info(
     """
     try:
         # Configure generation parameters
-        model_name = model if model else "gemini-2.5-flash-preview-05-20"
+        model_name = DEFAULT_MODEL
 
         # Create content with custom message if provided
         prompt = question
@@ -494,7 +487,6 @@ def scan_directory(
 async def analyze_repo_structure(
     repo_path: str,
     output_file: Optional[str] = None,
-    temperature: Optional[float] = 0.2,
     custom_message: Optional[str] = None,
 ) -> str:
     """Analyze repository structure and organization.
@@ -502,7 +494,6 @@ async def analyze_repo_structure(
     Args:
         repo_path: Path to the repository root directory.
         output_file: Optional file path to write the analysis to.
-        temperature: Optional temperature override (0.0-1.0).
         custom_message: Optional custom message providing additional context or instructions.
 
     Returns:
@@ -569,7 +560,7 @@ Provide your analysis in a clear, structured format with headings and bullet poi
 
         # Generate analysis
         params: GenerateContentConfigDict = {
-            "temperature": temperature if temperature is not None else 0.2,
+            "temperature": 0.2,
             "max_output_tokens": DEFAULT_MAX_TOKENS,
             "top_p": DEFAULT_TOP_P,
             "top_k": DEFAULT_TOP_K,
@@ -601,7 +592,6 @@ async def identify_patterns(
     code_files: List[str],
     pattern_type: str = "coding",  # Options: coding, architecture, testing, error-handling
     output_file: Optional[str] = None,
-    temperature: Optional[float] = 0.2,
     custom_message: Optional[str] = None,
 ) -> str:
     """Identify patterns in code files.
@@ -610,7 +600,6 @@ async def identify_patterns(
         code_files: List of file paths to analyze.
         pattern_type: Type of patterns to identify (coding, architecture, testing, error-handling).
         output_file: Optional file path to write the analysis to.
-        temperature: Optional temperature override (0.0-1.0).
         custom_message: Optional custom message providing additional context or instructions.
 
     Returns:
@@ -662,7 +651,7 @@ Format your response with clear headings and examples from the code.
 
         # Generate analysis
         params: GenerateContentConfigDict = {
-            "temperature": temperature if temperature is not None else 0.2,
+            "temperature": 0.2,
             "max_output_tokens": DEFAULT_MAX_TOKENS,
             "top_p": DEFAULT_TOP_P,
             "top_k": DEFAULT_TOP_K,
@@ -694,7 +683,6 @@ async def plan_implementation(
     requirements: str,
     context_files: List[str] = [],
     output_file: Optional[str] = None,
-    temperature: Optional[float] = 0.3,
     custom_message: Optional[str] = None,
 ) -> str:
     """Generate implementation plan based on requirements and code context.
@@ -767,7 +755,7 @@ Format your response as a structured implementation plan document.
 
         # Generate implementation plan
         params: GenerateContentConfigDict = {
-            "temperature": temperature if temperature is not None else 0.3,
+            "temperature": 0.3,
             "max_output_tokens": DEFAULT_MAX_TOKENS,
             "top_p": DEFAULT_TOP_P,
             "top_k": DEFAULT_TOP_K,
@@ -799,7 +787,6 @@ async def review_code(
     code_files: List[str],
     review_focus: str = "all",  # Options: all, quality, security, performance, style
     output_file: Optional[str] = None,
-    temperature: Optional[float] = 0.2,
     custom_message: Optional[str] = None,
 ) -> str:
     """Review code for quality, security, performance, or style issues.
@@ -808,7 +795,6 @@ async def review_code(
         code_files: List of file paths to review.
         review_focus: Focus area for the review (all, quality, security, performance, style).
         output_file: Optional file path to write the review to.
-        temperature: Optional temperature override (0.0-1.0).
         custom_message: Optional custom message providing additional context or instructions.
 
     Returns:
@@ -865,7 +851,7 @@ Focus your review on {focus_instructions}. Provide concrete, actionable feedback
 
         # Generate review
         params: GenerateContentConfigDict = {
-            "temperature": temperature if temperature is not None else 0.2,
+            "temperature": 0.2,
             "max_output_tokens": DEFAULT_MAX_TOKENS,
             "top_p": DEFAULT_TOP_P,
             "top_k": DEFAULT_TOP_K,
@@ -898,7 +884,6 @@ async def design_architecture(
     context_files: List[str] = [],
     tech_stack: Optional[str] = None,
     output_file: Optional[str] = None,
-    temperature: Optional[float] = 0.3,
     custom_message: Optional[str] = None,
 ) -> str:
     """Design software architecture based on requirements.
@@ -908,7 +893,6 @@ async def design_architecture(
         context_files: List of file paths to provide context from existing code.
         tech_stack: Optional technology stack constraints or preferences.
         output_file: Optional file path to write the architecture design to.
-        temperature: Optional temperature override (0.0-1.0).
         custom_message: Optional custom message providing additional context or instructions.
 
     Returns:
@@ -987,7 +971,7 @@ Format your response as a structured architecture design document with clear sec
 
         # Generate architecture design
         params: GenerateContentConfigDict = {
-            "temperature": temperature if temperature is not None else 0.3,
+            "temperature": 0.3,
             "max_output_tokens": DEFAULT_MAX_TOKENS,
             "top_p": DEFAULT_TOP_P,
             "top_k": DEFAULT_TOP_K,
