@@ -52,6 +52,13 @@ DEFAULT_MAX_TOKENS = (
 DEFAULT_TOP_P = float(os.environ.get("GEMINI_TOP_P", "0.95"))
 DEFAULT_TOP_K = int(os.environ.get("GEMINI_TOP_K", "40"))
 
+# System instruction to avoid flattery
+NO_FLATTERY_INSTRUCTION = (
+    "Never start your response by saying a question or idea or observation was good, "
+    "great, fascinating, profound, excellent, or any other positive adjective. "
+    "Skip the flattery and respond directly."
+)
+
 
 @mcp_server.resource("config://gemini")
 def get_gemini_config() -> str:
@@ -155,12 +162,14 @@ async def generate_text(
             complete_prompt = f"{prompt}\n{file_context_section}"
 
         # Handle system instruction and custom message
-        if system_instruction and custom_message:
-            params["system_instruction"] = f"{system_instruction}\n\n{custom_message}"
-        elif system_instruction:
-            params["system_instruction"] = system_instruction
-        elif custom_message:
-            params["system_instruction"] = custom_message
+        instructions = [NO_FLATTERY_INSTRUCTION]
+
+        if system_instruction:
+            instructions.append(system_instruction)
+        if custom_message:
+            instructions.append(custom_message)
+
+        params["system_instruction"] = "\n\n".join(instructions)
 
         # Create content
         response = await client.aio.models.generate_content(
@@ -182,6 +191,9 @@ async def generate_text(
 @mcp_server.tool()
 async def search_and_analyze_current_info(
     question: str,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    model: Optional[str] = None,
     custom_message: Optional[str] = None,
 ) -> str:
     """Search for current information and provide an AI-analyzed response.
@@ -218,6 +230,7 @@ async def search_and_analyze_current_info(
                 else DEFAULT_MAX_TOKENS,
                 top_p=DEFAULT_TOP_P,
                 top_k=DEFAULT_TOP_K,
+                system_instruction=NO_FLATTERY_INSTRUCTION,
             ),
         )
 
@@ -564,6 +577,7 @@ Provide your analysis in a clear, structured format with headings and bullet poi
             "max_output_tokens": DEFAULT_MAX_TOKENS,
             "top_p": DEFAULT_TOP_P,
             "top_k": DEFAULT_TOP_K,
+            "system_instruction": NO_FLATTERY_INSTRUCTION,
         }
 
         response = await client.aio.models.generate_content(
@@ -655,6 +669,7 @@ Format your response with clear headings and examples from the code.
             "max_output_tokens": DEFAULT_MAX_TOKENS,
             "top_p": DEFAULT_TOP_P,
             "top_k": DEFAULT_TOP_K,
+            "system_instruction": NO_FLATTERY_INSTRUCTION,
         }
 
         response = await client.aio.models.generate_content(
@@ -759,6 +774,7 @@ Format your response as a structured implementation plan document.
             "max_output_tokens": DEFAULT_MAX_TOKENS,
             "top_p": DEFAULT_TOP_P,
             "top_k": DEFAULT_TOP_K,
+            "system_instruction": NO_FLATTERY_INSTRUCTION,
         }
 
         response = await client.aio.models.generate_content(
@@ -855,6 +871,7 @@ Focus your review on {focus_instructions}. Provide concrete, actionable feedback
             "max_output_tokens": DEFAULT_MAX_TOKENS,
             "top_p": DEFAULT_TOP_P,
             "top_k": DEFAULT_TOP_K,
+            "system_instruction": NO_FLATTERY_INSTRUCTION,
         }
 
         response = await client.aio.models.generate_content(
@@ -975,6 +992,7 @@ Format your response as a structured architecture design document with clear sec
             "max_output_tokens": DEFAULT_MAX_TOKENS,
             "top_p": DEFAULT_TOP_P,
             "top_k": DEFAULT_TOP_K,
+            "system_instruction": NO_FLATTERY_INSTRUCTION,
         }
 
         response = await client.aio.models.generate_content(
