@@ -652,7 +652,7 @@ Provided files:
 
 For each file, I'll provide the content below:
 
-{chr(10).join([f'--- {f["path"]} ---\n{f["content"]}\n' for f in file_contents])}
+{chr(10).join([f"--- {f['path']} ---\n{f['content']}\n" for f in file_contents])}
 
 Please identify and explain:
 1. Consistent patterns across the files
@@ -850,7 +850,7 @@ Provided files for review:
 
 For each file, I'll provide the content below:
 
-{chr(10).join([f'--- {f["path"]} ---\n```\n{f["content"]}\n```\n' for f in file_contents])}
+{chr(10).join([f"--- {f['path']} ---\n```\n{f['content']}\n```\n" for f in file_contents])}
 
 Your code review should include:
 
@@ -1014,6 +1014,152 @@ Format your response as a structured architecture design document with clear sec
 
     except Exception as e:
         return f"Error creating architecture design: {str(e)}"
+
+
+@mcp_server.tool()
+async def generate_unit_tests(
+    code_files: List[str],
+    testing_framework: str = "pytest",
+    output_file: Optional[str] = None,
+    custom_message: Optional[str] = None,
+) -> str:
+    """Generate unit tests for the provided code files.
+
+    Args:
+        code_files: Files to generate tests for.
+        testing_framework: Test framework to target.
+        output_file: Optional file path to write the tests to.
+        custom_message: Additional instructions for test generation.
+
+    Returns:
+        Generated unit tests.
+    """
+    try:
+        file_contents: List[Dict[str, Any]] = []
+        for file_path in code_files:
+            content = read_file_content(file_path)
+            if content.startswith("Error"):
+                return content
+
+            file_contents.append(
+                {
+                    "path": file_path,
+                    "name": pathlib.Path(file_path).name,
+                    "content": content,
+                }
+            )
+
+        file_sections = "\n".join(
+            [
+                f"--- {info['path']} ---\n```\n{info['content']}\n```"
+                for info in file_contents
+            ]
+        )
+
+        prompt = (
+            f"Generate unit tests using {testing_framework} for the following files.\n\n"
+            f"{custom_message if custom_message else ''}\n\n"
+            f"Files:\n"
+            f"{json.dumps([{'path': info['path'], 'name': info['name']} for info in file_contents], indent=2)}\n\n"
+            f"{file_sections}"
+        )
+
+        params: GenerateContentConfigDict = {
+            "temperature": 0.2,
+            "max_output_tokens": DEFAULT_MAX_TOKENS,
+            "top_p": DEFAULT_TOP_P,
+            "top_k": DEFAULT_TOP_K,
+            "system_instruction": NO_FLATTERY_INSTRUCTION,
+        }
+
+        response = await client.aio.models.generate_content(
+            model=DEFAULT_MODEL,
+            contents=prompt,
+            config=params,
+        )
+
+        tests = response.text
+        if output_file and tests is not None:
+            result = write_to_file(output_file, tests)
+            if result.startswith("Error"):
+                return f"{result}\n\nUnit tests:\n{tests}"
+            return f"Unit tests written to {output_file}"
+
+        return tests if tests is not None else "No tests generated"
+    except Exception as e:
+        return f"Error generating unit tests: {str(e)}"
+
+
+@mcp_server.tool()
+async def explain_code(
+    code_files: List[str],
+    output_file: Optional[str] = None,
+    custom_message: Optional[str] = None,
+) -> str:
+    """Explain the provided code files in plain language.
+
+    Args:
+        code_files: Files to explain.
+        output_file: Optional file path to write the explanation to.
+        custom_message: Additional instructions for the explanation.
+
+    Returns:
+        Explanation of the code.
+    """
+    try:
+        file_contents: List[Dict[str, Any]] = []
+        for file_path in code_files:
+            content = read_file_content(file_path)
+            if content.startswith("Error"):
+                return content
+
+            file_contents.append(
+                {
+                    "path": file_path,
+                    "name": pathlib.Path(file_path).name,
+                    "content": content,
+                }
+            )
+
+        file_sections = "\n".join(
+            [
+                f"--- {info['path']} ---\n```\n{info['content']}\n```"
+                for info in file_contents
+            ]
+        )
+
+        prompt = (
+            "Explain in detail what the following code does.\n\n"
+            f"{custom_message if custom_message else ''}\n\n"
+            f"Files:\n"
+            f"{json.dumps([{'path': info['path'], 'name': info['name']} for info in file_contents], indent=2)}\n\n"
+            f"{file_sections}"
+        )
+
+        params: GenerateContentConfigDict = {
+            "temperature": 0.2,
+            "max_output_tokens": DEFAULT_MAX_TOKENS,
+            "top_p": DEFAULT_TOP_P,
+            "top_k": DEFAULT_TOP_K,
+            "system_instruction": NO_FLATTERY_INSTRUCTION,
+        }
+
+        response = await client.aio.models.generate_content(
+            model=DEFAULT_MODEL,
+            contents=prompt,
+            config=params,
+        )
+
+        explanation = response.text
+        if output_file and explanation is not None:
+            result = write_to_file(output_file, explanation)
+            if result.startswith("Error"):
+                return f"{result}\n\nExplanation:\n{explanation}"
+            return f"Code explanation written to {output_file}"
+
+        return explanation if explanation is not None else "No explanation generated"
+    except Exception as e:
+        return f"Error explaining code: {str(e)}"
 
 
 if __name__ == "__main__":
