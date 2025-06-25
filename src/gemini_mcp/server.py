@@ -1,10 +1,11 @@
 """MCP server for Gemini API."""
 
+import asyncio
 import json
 import os
 import pathlib
 import subprocess
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 from dotenv import load_dotenv
 from google import genai  # type: ignore[reportMissingTypeStubs]
@@ -820,23 +821,95 @@ Format your response as a structured implementation plan document.
         return f"Error creating implementation plan: {str(e)}"
 
 
+async def _generate_single_review(
+    file_contents: List[Dict[str, Any]],
+    review_context: str,
+    custom_message: Optional[str] = None,
+) -> str:
+    """Helper function to generate a single code review with specific context.
+
+    Args:
+        file_contents: List of file info dicts with path, name, and content.
+        review_context: Specific instructions for this code review.
+        custom_message: Optional global context message.
+
+    Returns:
+        Generated code review as string.
+    """
+    try:
+        # Create prompt with specific review context
+        prompt_parts = [
+            "Perform a detailed code review with the following focus:",
+            f"\nReview Context: {review_context}",
+        ]
+
+        if custom_message:
+            prompt_parts.append(f"\nAdditional Context: {custom_message}")
+
+        prompt_parts.extend(
+            [
+                "\n\nProvided files for review:",
+                f"{json.dumps([{'path': f['path'], 'name': f['name']} for f in file_contents], indent=2)}",
+                "\n\nFor each file, I'll provide the content below:\n",
+                f"{chr(10).join([f'--- {f["path"]} ---\n```\n{f["content"]}\n```\n' for f in file_contents])}",
+                "\n\nYour code review should include:",
+                "\n1. Summary of findings",
+                "2. Issues identified (organized by severity: Critical, High, Medium, Low)",
+                "   - Include line numbers when referencing specific code",
+                "   - Explain why each issue is problematic",
+                "3. Recommendations for addressing each issue",
+                "4. Positive aspects of the code worth highlighting",
+                "5. Overall assessment",
+                "\n\nProvide concrete, actionable feedback focused on the review context above.",
+            ]
+        )
+
+        prompt = "\n".join(prompt_parts)
+
+        params: GenerateContentConfigDict = {
+            "temperature": 0.2,
+            "max_output_tokens": DEFAULT_MAX_TOKENS,
+            "top_p": DEFAULT_TOP_P,
+            "top_k": DEFAULT_TOP_K,
+            "system_instruction": NO_FLATTERY_INSTRUCTION,
+        }
+
+        response = await client.aio.models.generate_content(
+            model=DEFAULT_MODEL,
+            contents=prompt,
+            config=params,
+        )
+
+        return response.text if response.text is not None else "No review generated"
+    except Exception as e:
+        return f"Error generating code review: {str(e)}"
+
+
 @mcp_server.tool()
 async def review_code(
     code_files: List[str],
     review_focus: str = "all",  # Options: all, quality, security, performance, style
+    review_specifications: Optional[List[Tuple[str, str]]] = None,
     output_file: Optional[str] = None,
     custom_message: Optional[str] = None,
 ) -> str:
     """Review code for quality, security, performance, or style issues.
 
+    Can generate multiple code reviews concurrently with different focus areas.
+
     Args:
         code_files: List of file paths to review.
         review_focus: Focus area for the review (all, quality, security, performance, style).
-        output_file: Optional file path to write the review to.
-        custom_message: Optional custom message providing additional context or instructions.
+                     Ignored if review_specifications is provided.
+        review_specifications: Optional list of (review_context, output_path) tuples (max 5).
+                             Each tuple specifies custom context and output file for a review.
+                             Example: [("Focus on security vulnerabilities", "security_review.md"),
+                                     ("Analyze performance bottlenecks", "performance_review.md")]
+        output_file: Optional file path for single review (used if review_specifications is None).
+        custom_message: Additional context applied to all reviews.
 
     Returns:
-        Code review with identified issues and recommendations.
+        Summary of generated reviews or error message.
     """
     try:
         # Read content of all files
@@ -853,65 +926,69 @@ async def review_code(
             }
             file_contents.append(file_info)
 
-        # Determine review focus instructions
-        focus_instructions = {
-            "all": "all aspects including code quality, security, performance, and style",
-            "quality": "code quality including maintainability, readability, and testability",
-            "security": "security vulnerabilities, input validation, authentication, and data handling",
-            "performance": "performance optimizations, inefficient algorithms, and resource usage",
-            "style": "code style, naming conventions, and adherence to best practices",
-        }.get(review_focus, "all aspects of the code")
+        # Handle review_specifications for concurrent generation
+        if review_specifications:
+            # Validate max 5 specifications
+            if len(review_specifications) > 5:
+                return "Error: Maximum 5 review specifications allowed"
 
-        # Create prompt
-        prompt = f"""Perform a detailed code review focusing on {focus_instructions}.
+            # Create tasks for concurrent generation
+            tasks: List[Any] = []
+            output_paths: List[str] = []
+            for review_context, output_path in review_specifications:
+                task = _generate_single_review(
+                    file_contents, review_context, custom_message
+                )
+                tasks.append(task)
+                output_paths.append(output_path)
 
-{custom_message if custom_message else ""}
+            # Execute all tasks concurrently using asyncio.gather
+            review_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-Provided files for review:
-{json.dumps([{"path": f["path"], "name": f["name"]} for f in file_contents], indent=2)}
+            # Process results and write to files
+            results: List[str] = []
+            for review_result, output_path in zip(review_results, output_paths):
+                if isinstance(review_result, Exception):
+                    results.append(f"Failed for {output_path}: {str(review_result)}")
+                elif isinstance(review_result, str) and review_result.startswith(
+                    "Error"
+                ):
+                    results.append(f"Failed for {output_path}: {review_result}")
+                elif isinstance(review_result, str):
+                    write_result = write_to_file(output_path, review_result)
+                    if write_result.startswith("Error"):
+                        results.append(f"Failed to write {output_path}: {write_result}")
+                    else:
+                        results.append(f"Code review written to {output_path}")
+                else:
+                    results.append(f"Failed for {output_path}: Unexpected result type")
 
-For each file, I'll provide the content below:
+            # Return summary of all results
+            return "\n".join(results)
 
-{chr(10).join([f"--- {f['path']} ---\n```\n{f['content']}\n```\n" for f in file_contents])}
+        # Backward compatibility: single review generation
+        else:
+            # Determine review focus instructions
+            focus_instructions = {
+                "all": "all aspects including code quality, security, performance, and style",
+                "quality": "code quality including maintainability, readability, and testability",
+                "security": "security vulnerabilities, input validation, authentication, and data handling",
+                "performance": "performance optimizations, inefficient algorithms, and resource usage",
+                "style": "code style, naming conventions, and adherence to best practices",
+            }.get(review_focus, "all aspects of the code")
 
-Your code review should include:
+            review_context = f"Focus on {focus_instructions}"
+            review = await _generate_single_review(
+                file_contents, review_context, custom_message
+            )
 
-1. Summary of findings
-2. Issues identified (organized by severity: Critical, High, Medium, Low)
-   - Include line numbers when referencing specific code
-   - Explain why each issue is problematic
-3. Recommendations for addressing each issue
-4. Positive aspects of the code worth highlighting
-5. Overall assessment
+            if output_file and review and not review.startswith("Error"):
+                result = write_to_file(output_file, review)
+                if result.startswith("Error"):
+                    return f"{result}\n\nReview:\n{review}"
+                return f"Code review written to {output_file}"
 
-Focus your review on {focus_instructions}. Provide concrete, actionable feedback.
-"""
-
-        # Generate review
-        params: GenerateContentConfigDict = {
-            "temperature": 0.2,
-            "max_output_tokens": DEFAULT_MAX_TOKENS,
-            "top_p": DEFAULT_TOP_P,
-            "top_k": DEFAULT_TOP_K,
-            "system_instruction": NO_FLATTERY_INSTRUCTION,
-        }
-
-        response = await client.aio.models.generate_content(
-            model=DEFAULT_MODEL,
-            contents=prompt,
-            config=params,
-        )
-
-        review = response.text
-
-        # Write to file if specified
-        if output_file and review is not None:
-            result = write_to_file(output_file, review)
-            if result.startswith("Error"):
-                return f"{result}\n\nReview:\n{review}"
-            return f"Code review written to {output_file}"
-
-        return review if review is not None else "No code review generated"
+            return review
 
     except Exception as e:
         return f"Error performing code review: {str(e)}"
@@ -1038,23 +1115,92 @@ Format your response as a structured architecture design document with clear sec
         return f"Error creating architecture design: {str(e)}"
 
 
+async def _generate_single_test_suite(
+    file_contents: List[Dict[str, Any]],
+    testing_framework: str,
+    test_context: str,
+    custom_message: Optional[str] = None,
+) -> str:
+    """Helper function to generate a single test suite with specific context.
+
+    Args:
+        file_contents: List of file info dicts with path, name, and content.
+        testing_framework: Test framework to use.
+        test_context: Specific instructions for this test suite.
+        custom_message: Optional global context message.
+
+    Returns:
+        Generated test suite as string.
+    """
+    try:
+        file_sections = "\n".join(
+            [
+                f"--- {info['path']} ---\n```\n{info['content']}\n```"
+                for info in file_contents
+            ]
+        )
+
+        # Build prompt with specific test context
+        prompt_parts = [
+            f"Generate unit tests using {testing_framework} for the following files.",
+            f"\nTest Context: {test_context}",
+        ]
+
+        if custom_message:
+            prompt_parts.append(f"\nAdditional Instructions: {custom_message}")
+
+        prompt_parts.extend(
+            [
+                f"\n\nFiles:\n{json.dumps([{'path': info['path'], 'name': info['name']} for info in file_contents], indent=2)}",
+                f"\n\n{file_sections}",
+            ]
+        )
+
+        prompt = "\n".join(prompt_parts)
+
+        params: GenerateContentConfigDict = {
+            "temperature": 0.2,
+            "max_output_tokens": DEFAULT_MAX_TOKENS,
+            "top_p": DEFAULT_TOP_P,
+            "top_k": DEFAULT_TOP_K,
+            "system_instruction": NO_FLATTERY_INSTRUCTION,
+        }
+
+        response = await client.aio.models.generate_content(
+            model=DEFAULT_MODEL,
+            contents=prompt,
+            config=params,
+        )
+
+        return response.text if response.text is not None else "No tests generated"
+    except Exception as e:
+        return f"Error generating test suite: {str(e)}"
+
+
 @mcp_server.tool()
 async def generate_unit_tests(
     code_files: List[str],
     testing_framework: str = "pytest",
+    test_specifications: Optional[List[Tuple[str, str]]] = None,
     output_file: Optional[str] = None,
     custom_message: Optional[str] = None,
 ) -> str:
     """Generate unit tests for the provided code files.
 
+    Can generate multiple test suites concurrently with different contexts.
+
     Args:
         code_files: Files to generate tests for.
         testing_framework: Test framework to target.
-        output_file: Optional file path to write the tests to.
-        custom_message: Additional instructions for test generation.
+        test_specifications: Optional list of (test_context, output_path) tuples (max 5).
+                           Each tuple specifies custom context and output file for a test suite.
+                           Example: [("Focus on edge cases", "test_edge.py"),
+                                   ("Test error handling", "test_errors.py")]
+        output_file: Optional file path for single test suite (used if test_specifications is None).
+        custom_message: Additional instructions applied to all test generation.
 
     Returns:
-        Generated unit tests.
+        Summary of generated tests or error message.
     """
     try:
         file_contents: List[Dict[str, Any]] = []
@@ -1071,43 +1217,58 @@ async def generate_unit_tests(
                 }
             )
 
-        file_sections = "\n".join(
-            [
-                f"--- {info['path']} ---\n```\n{info['content']}\n```"
-                for info in file_contents
-            ]
-        )
+        # Handle test_specifications for concurrent generation
+        if test_specifications:
+            # Validate max 5 specifications
+            if len(test_specifications) > 5:
+                return "Error: Maximum 5 test specifications allowed"
 
-        prompt = (
-            f"Generate unit tests using {testing_framework} for the following files.\n\n"
-            f"{custom_message if custom_message else ''}\n\n"
-            f"Files:\n"
-            f"{json.dumps([{'path': info['path'], 'name': info['name']} for info in file_contents], indent=2)}\n\n"
-            f"{file_sections}"
-        )
+            # Create tasks for concurrent generation
+            tasks: List[Any] = []
+            output_paths: List[str] = []
+            for test_context, output_path in test_specifications:
+                task = _generate_single_test_suite(
+                    file_contents, testing_framework, test_context, custom_message
+                )
+                tasks.append(task)
+                output_paths.append(output_path)
 
-        params: GenerateContentConfigDict = {
-            "temperature": 0.2,
-            "max_output_tokens": DEFAULT_MAX_TOKENS,
-            "top_p": DEFAULT_TOP_P,
-            "top_k": DEFAULT_TOP_K,
-            "system_instruction": NO_FLATTERY_INSTRUCTION,
-        }
+            # Execute all tasks concurrently using asyncio.gather
+            test_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        response = await client.aio.models.generate_content(
-            model=DEFAULT_MODEL,
-            contents=prompt,
-            config=params,
-        )
+            # Process results and write to files
+            results: List[str] = []
+            for test_result, output_path in zip(test_results, output_paths):
+                if isinstance(test_result, Exception):
+                    results.append(f"Failed for {output_path}: {str(test_result)}")
+                elif isinstance(test_result, str) and test_result.startswith("Error"):
+                    results.append(f"Failed for {output_path}: {test_result}")
+                elif isinstance(test_result, str):
+                    write_result = write_to_file(output_path, test_result)
+                    if write_result.startswith("Error"):
+                        results.append(f"Failed to write {output_path}: {write_result}")
+                    else:
+                        results.append(f"Generated tests written to {output_path}")
+                else:
+                    results.append(f"Failed for {output_path}: Unexpected result type")
 
-        tests = response.text
-        if output_file and tests is not None:
-            result = write_to_file(output_file, tests)
-            if result.startswith("Error"):
-                return f"{result}\n\nUnit tests:\n{tests}"
-            return f"Unit tests written to {output_file}"
+            # Return summary of all results
+            return "\n".join(results)
 
-        return tests if tests is not None else "No tests generated"
+        # Backward compatibility: single test suite generation
+        else:
+            test_context = "Generate comprehensive unit tests"
+            tests = await _generate_single_test_suite(
+                file_contents, testing_framework, test_context, custom_message
+            )
+
+            if output_file and tests and not tests.startswith("Error"):
+                result = write_to_file(output_file, tests)
+                if result.startswith("Error"):
+                    return f"{result}\n\nUnit tests:\n{tests}"
+                return f"Unit tests written to {output_file}"
+
+            return tests
     except Exception as e:
         return f"Error generating unit tests: {str(e)}"
 
