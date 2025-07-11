@@ -201,9 +201,6 @@ async def generate_text(
 @mcp_server.tool()
 async def search_and_analyze_current_info(
     question: str,
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-    model: Optional[str] = None,
     custom_message: Optional[str] = None,
 ) -> str:
     """Search for current information and provide an AI-analyzed response.
@@ -212,17 +209,27 @@ async def search_and_analyze_current_info(
     and provide a comprehensive, fact-based response. The AI will automatically
     search for relevant information and synthesize it into a well-sourced answer.
 
+    Use this when you need:
+    - Current events, news, or recent developments
+    - Up-to-date information that changes frequently
+    - Facts that require verification from multiple sources
+    - Information beyond the model's training data cutoff
+    - Data-backed responses with real-time information
+
+    Example questions:
+    - "What are the latest developments in AI regulation?"
+    - "What is the current status of the Mars mission?"
+    - "What are today's stock market trends?"
+    - "What is the weather forecast for next week in Tokyo?"
 
     Args:
         question: The question or request you want Gemini to answer using current web data.
+        custom_message: Optional custom message providing additional context or instructions.
 
     Returns:
         AI-generated response based on current web search results.
     """
     try:
-        # Configure generation parameters
-        model_name = DEFAULT_MODEL
-
         # Create content with custom message if provided
         prompt = question
         if custom_message:
@@ -230,14 +237,12 @@ async def search_and_analyze_current_info(
 
         # Generate content with Google Search tool
         response = await client.aio.models.generate_content(
-            model=model_name,
+            model=DEFAULT_MODEL,
             contents=prompt,
             config=GenerateContentConfig(
                 tools=[Tool(google_search=GoogleSearch())],
-                temperature=temperature if temperature is not None else 0.0,
-                max_output_tokens=max_tokens
-                if max_tokens is not None
-                else DEFAULT_MAX_TOKENS,
+                temperature=0.0,  # Low temperature for factual accuracy
+                max_output_tokens=DEFAULT_MAX_TOKENS,
                 top_p=DEFAULT_TOP_P,
                 top_k=DEFAULT_TOP_K,
                 system_instruction=NO_FLATTERY_INSTRUCTION,
@@ -253,14 +258,12 @@ async def search_and_analyze_current_info(
 # async def analyze_image(
 #     image_path: str,
 #     prompt: str,
-#     temperature: Optional[float] = None,
 # ) -> str | None:
 #     """Analyze an image using Gemini's multimodal capabilities.
 
 #     Args:
 #         image_path: Path to the image file.
 #         prompt: Text prompt describing what to analyze in the image.
-#         temperature: Optional temperature override (0.0-1.0).
 
 #     Returns:
 #         Analysis of the image as text.
@@ -271,9 +274,7 @@ async def search_and_analyze_current_info(
 
 #         # Configure generation parameters
 #         params: GenerateContentConfigDict = {
-#             "temperature": temperature
-#             if temperature is not None
-#             else DEFAULT_TEMPERATURE,
+#             "temperature": DEFAULT_TEMPERATURE,
 #             "max_output_tokens": DEFAULT_MAX_TOKENS,
 #             "top_p": DEFAULT_TOP_P,
 #             "top_k": DEFAULT_TOP_K,
@@ -298,7 +299,6 @@ async def search_and_analyze_current_info(
 #     prompt: str,
 #     system_instruction: str,
 #     json_schema: str,
-#     temperature: Optional[float] = 0.2,
 # ) -> str | None:
 #     """Generate structured output according to a JSON schema.
 
@@ -306,7 +306,6 @@ async def search_and_analyze_current_info(
 #         prompt: The user prompt to send to Gemini.
 #         system_instruction: System instructions to guide structured generation.
 #         json_schema: JSON schema that defines the expected structure.
-#         temperature: Optional temperature override (0.0-1.0).
 
 #     Returns:
 #         JSON-formatted structured response.
@@ -314,9 +313,7 @@ async def search_and_analyze_current_info(
 #     try:
 #         # Configure generation parameters
 #         params: GenerateContentConfigDict = {
-#             "temperature": temperature
-#             if temperature is not None
-#             else DEFAULT_TEMPERATURE,
+#             "temperature": DEFAULT_TEMPERATURE,
 #             "max_output_tokens": DEFAULT_MAX_TOKENS,
 #             "top_p": DEFAULT_TOP_P,
 #             "top_k": DEFAULT_TOP_K,
@@ -737,7 +734,6 @@ async def plan_implementation(
         requirements: Description of what needs to be implemented.
         context_files: List of file paths to provide context.
         output_file: Optional file path to write the plan to.
-        temperature: Optional temperature override (0.0-1.0).
         custom_message: Optional custom message providing additional context or instructions.
 
     Returns:
@@ -895,18 +891,19 @@ async def _generate_single_review(
 
 @mcp_server.tool()
 async def review_code(
-    code_files: List[str],
+    files: List[str],
     review_focus: str = "all",  # Options: all, quality, security, performance, style
     review_specifications: Optional[List[Tuple[str, str]]] = None,
     output_file: Optional[str] = None,
     custom_message: Optional[str] = None,
 ) -> str:
-    """Review code for quality, security, performance, or style issues.
+    """Review files for quality, security, performance, or style issues.
 
-    Can generate multiple code reviews concurrently with different focus areas.
+    Can review any text files including code, documentation, configuration files,
+    markdown, etc. Generates multiple reviews concurrently with different focus areas.
 
     Args:
-        code_files: List of file paths to review.
+        files: List of file paths to review (code, docs, configs, markdown, etc).
         review_focus: Focus area for the review (all, quality, security, performance, style).
                      Ignored if review_specifications is provided.
         review_specifications: Optional list of (review_context, output_path) tuples (max 5).
@@ -922,7 +919,7 @@ async def review_code(
     try:
         # Read content of all files
         file_contents: List[Dict[str, Any]] = []
-        for file_path in code_files:
+        for file_path in files:
             content = read_file_content(file_path)
             if content.startswith("Error"):
                 return content
@@ -1418,13 +1415,24 @@ async def summarize_files(
 
 @mcp_server.tool()
 async def extract_todos(
-    code_files: List[str],
+    files: List[str],
     output_file: Optional[str] = None,
 ) -> str:
-    """Extract TODO and FIXME comments from code files."""
+    """Extract TODO and FIXME comments from files.
+
+    Searches for TODO and FIXME comments in any text files including code,
+    documentation, markdown, configuration files, etc.
+
+    Args:
+        files: List of file paths to search for TODOs (any text files).
+        output_file: Optional file path to write the extracted TODOs to.
+
+    Returns:
+        List of TODOs found or path to output file.
+    """
     try:
         todos: List[Dict[str, object]] = []
-        for file_path in code_files:
+        for file_path in files:
             content = read_file_content(file_path)
             if content.startswith("Error"):
                 return content
